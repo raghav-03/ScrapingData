@@ -6,7 +6,7 @@ const createCsvWriter = require("csv-writer").createObjectCsvWriter; // A CSV wr
 // Setting up env config
 const dotenv = require("dotenv");
 dotenv.config();
-
+const puppeteer = require("puppeteer");
 app.get("/", async (req, res) => {
   try {
     // Defining the Headers for CSV file
@@ -19,39 +19,59 @@ app.get("/", async (req, res) => {
         { id: "age", title: "Age" },
       ],
     });
-    // Making a GET request to the URL
-    const response = await axios.request({
-      method: "GET",
-      url: process.env.URL,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-      },
+    let title = [];
+    let url = [];
+    let area = [];
+    let age = [];
+    let scrapedData = [];
+    const scrapeInfiniteScrollItems = async (page, itemTargetCount) => {
+      // page is the targeted page
+      // itemTargetCount is the number of items to be scraped
+      // run a loop till the itemTargetCount is reached
+      while (itemTargetCount > title.length) {
+        // fetching the title of the property
+        title = await page.evaluate(() => {
+          const title = Array.from(
+            document.querySelectorAll(".nb__2_XSE > section>div>span>h2")
+          );
+          return title.map((item) => item.innerText);
+        });
+        // fetching the url of the property
+        url = await page.evaluate(() => {
+          const url = Array.from(
+            document.querySelectorAll(".nb__2_XSE > section>div>span>h2>a")
+          );
+          return url.map((item) => item.getAttribute("href"));
+        });
+        // fetching the area of the property
+        area = await page.evaluate(() => {
+          const area = Array.from(
+            document.querySelectorAll(
+              ".nb__7nqQI>div:nth-child(1)>div:nth-child(4)>div:nth-child(1)>div"
+            )
+          );
+          return area.map((item) => item.innerText);
+        });
+        // scrolling the page to the bottom
+        previousHeight = await page.evaluate("document.body.scrollHeight");
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+        await page.waitForFunction(
+          `document.body.scrollHeight > ${previousHeight}`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+
+    const browser = await puppeteer.launch({
+      headless: false,
     });
-    // with the help of cheerio we are loading the response data
-    const $ = cheerio.load(response.data);
-    const scrapedData = [];
-    const title = [];
-    const url = [];
-    const area = [];
-    const age = [];
-    // Getting the desired data from the HTML
-    const htmlElement = $(".infinite-scroll-component ")
-      .find(".nb__2_XSE")
-      .each(async (index, element) => {
-        const property_name = $(element).find("section>div>span>h2").text();
-        title.push(property_name);
-        const property_url = $(element)
-          .find("section>div>span>h2>a")
-          .attr("href");
-        url.push(`${process.env.HOST}${property_url}`);
-        const property_area = $(element)
-          .find(".nb__7nqQI>div>div:nth-child(4)>div>div")
-          .text();
-        area.push(property_area);
-      });
+    // Calling puppeteer to scrape the data with infinite scroll
+    const page = await browser.newPage();
+    await page.goto(process.env.URL, { timeout: 0 });
+    await scrapeInfiniteScrollItems(page, 50);
     // Getting the age of the property
     for (let i = 0; i < url.length; i++) {
+      url[i] = `${process.env.HOST}${url[i]}`;
       const ageresponse = await axios.request({
         method: "GET",
         url: url[i],
@@ -64,12 +84,12 @@ app.get("/", async (req, res) => {
       const agedata = $(
         ".nb__28cwR>div:nth-child(1)>div:nth-child(3)>h5"
       ).text();
-      age.push(agedata);
+      age[i] = agedata;
       const obj = {
         title: title[i],
         url: url[i],
         area: area[i],
-        age: age[i],
+        age: agedata,
       };
       scrapedData.push(obj);
     }
@@ -80,6 +100,7 @@ app.get("/", async (req, res) => {
       message: "CSV file created successfully",
     });
   } catch (e) {
+    console.log(e);
     res.status(400).json({
       success: false,
       message: e.message,
